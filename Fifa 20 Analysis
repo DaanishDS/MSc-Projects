@@ -1,1 +1,588 @@
+#Working w data project
+
+#This is an analysis of Fifa20 dataset
+#Will look at a variety of things, such as age distributions, nationality, wages, BMI etc
+#Will generally focus on the top players/clubs
+
+#My topic areas
+#Data Wrangling- preparing datasets for analysis
+#Graphics
+#Handling Missing data
+#Maps
+#Random Forests
+
+#Loading packages
+
+library(arm)
+library(norm)
+library(tidyverse)
+library(caTools)
+library(randomForest)
+library(spdep)
+library(sf)
+library(CARBayes)
+library(rgdal)
+library(rgeos)
+library(RColorBrewer)
+library(ggplot2)
+library(tidyverse)
+library(broom)
+library(cclust)
+library(GGally)
+library(LearnBayes)
+library(memisc)
+library(MASS)
+library(sjstats)
+library(sjPlot)
+library(tidyr)
+library(caTools)
+library(dplyr)
+library(raster)
+library(tidyverse)
+library(rvest)
+library(magrittr)
+library(ggmap)
+library(stringr)
+library(maps)
+library(mice)
+library(missForest)
+library(VIM)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(viridis)
+library(plyr)
+library(corrplot)
+library(ggcorrplot)
+library(scico)
+library(formattable)
+library(kableExtra)
+
+#Reading in the datasets
+
+Fifa20players <- read.csv('fifa20data.csv')
+
+set.seed(500)
+options(scipen = 999999)
+
+#Some summary statistics
+
+summary(Fifa20players$release_clause_eur)
+summary(Fifa20players$overall)
+summary(Fifa20players$potential)
+summary(Fifa20players$age)
+summary(Fifa20players$height_cm)
+summary(Fifa20players$weight_kg)
+
+#Weird cc things above names and club names are the foreign accent things on vowels
+
+#removing uneeded columns that are not helpful in showing relationships to player attributes
+
+Fifa20players <- subset(Fifa20players, select = -c(loaned_from,long_name, player_url, real_face, nation_position, contract_valid_until)) 
+                      
+#NA values are generally no big deal in these datasets as there are NAs in player attributes where they don't play in that positions
+#e.g.- outfield players don't have goalkeeper stats- this does make it slightly harder to compare
+#keepers to outfield players
+
+#Making NA values 0
+
+Fifa20players[is.na(Fifa20players)] <- 0
+
+#Creating data frames of variables for required plots
+
+#Handling Missing Data with Mice
+
+#Removing 10% of values at random from height and weight columns
+Fifa20missingweightandheight <- prodNA(Fifa20players[,5:6], noNA = 0.1)
+
+#Using mice to identify pattern of missing data
+md.pattern(Fifa20missingweightandheight)
+
+#Visual representation of missing data
+#Comment on it
+vis_plot_missing <- aggr(Fifa20missingweightandheight, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(data), cex.axis=0.5, cex.numbers=0.5, gap=3, ylab=c("Histogram of missing data","Pattern"))
+
+#Using random forests to impute values
+imputeData <- mice(Fifa20missingweightandheight,m=1,maxit=50,meth='rf',seed=500)
+
+imputeData$imp$height_cm
+
+imputeData$imp$weight_kg
+
+#Constructing completed dataset w imputed values
+completefifa20data <- complete(imputeData)
+
+#comment on graphs and the colour
+stripplot(imputeData, pch = 20, cex = 1.2)
+
+#MAP
+#MAP of world by number of players in each country
+
+#Wrangling data of players by nation
+
+nation <- table(Fifa20players$nationality)
+
+nation <- as.data.frame(nation)
+
+names(nation)[1]<-"region"
+
+#Removing England, Scotland and NI rows
+nation <- nation[-c(46, 114, 130),]
+
+#Need to combine NI, England, Scotland into UK 
+
+#UK = 2025
+
+#Adding a UK row
+UK <- data.frame(region='UK',Freq='2025') 
+nation <- rbind(nation, UK)
+
+#Loading in world data
+world0 <- map_data("world")
+
+#Seeing if country names in world map and my data frame match
+matchcountries <- nation$region %in%
+  world0$region
+
+nation <- add_column(nation, matchcountries)
+
+#Renaming countries to match those in the worldmap dataset
+nation$region <- as.factor(nation$region)
+
+nation$region <- plyr::revalue(nation$region, c('United States'='USA', 'Antigua & Barbuda'='Antigua', 'Bosnia Herzegovina'='Bosnia and Herzegovina', 
+                                                'Central African Rep.'='Central African Republic', 'China PR'='China',
+                                                'Congo'='Republic of Congo', 'DR Congo'='Democratic Republic of the Congo', 'FYR Macedonia'='Macedonia',
+                                                'Guinea Bissau'='Guinea', 'Korea DPR'='North Korea', 'Korea Republic'='South Korea',
+                                                'Republic of Ireland'='Ireland', 'St Kitts Nevis', 'St Lucia', 'Wales', 'Trinidad & Tobago'='Trinidad'))
+
+str(nation)
+
+str(world0)
+
+#Getting rid of match countries column
+nation$matchcountries<- NULL
+nation
+
+#Creating a new dataframe with same numbers of rows as regions in world map dataset
+tojoin <- as.data.frame(matrix(
+  nrow = length(table(world0$region)),
+  ncol = 2,
+  NA,
+  dimnames = list(names(table(world0$region)), colnames(nation))
+))
+tojoin$region <- rownames(tojoin)
+
+#Trying to get compatible types for nation
+nation <- data.frame(lapply(nation, as.character), stringsAsFactors=FALSE)
+
+tojoin <- data.frame(lapply(tojoin, as.character), stringsAsFactors=FALSE)
+
+#Joining my dataframe with worldmap data
+all <- full_join(nation, tojoin)
+all <- all[order(all$region), ]
+
+mapbig <- inner_join(world0, all, by = "region")
+
+str(mapbig)
+
+mapbig <- data.frame(lapply(mapbig, as.numeric), stringsAsFactors=FALSE)
+
+str(mapbig)
+
+#Map of background for map
+worldmapempty <- ggplot() + theme(
+  panel.background = element_rect(fill = "lightcyan1",
+                                  color = NA),
+  panel.grid = element_blank(),
+  axis.text.x = element_blank(),
+  axis.text.y = element_blank(),
+  axis.ticks = element_blank(),
+  axis.title.x = element_blank(),
+  axis.title.y = element_blank()
+)
+
+worldmapempty
+
+str(worldmapempty)
+
+#Plotting map
+Freqmap <- worldmapempty +  geom_polygon(data = mapbig,
+                            aes(fill = Freq,
+                            x = long,
+                            y = lat,
+                            group = group),
+                            color = "grey70") +
+                            labs(title = "Nationality of Fifa 20 Players ",
+                            caption = "Data from Kaggle, map from GGmaps")  +
+                            theme(text = element_text(size = 30),
+                            plot.title = element_text(face = "bold")) + scale_fill_viridis(option = "plasma",
+                            direction = -1,
+                            breaks = c(0, 500, 1000, 1500, 2000, 2500), limits= c(0, 2500),
+                            name = "",
+                            na.value = "grey80",
+                            guide = guide_colorbar(
+                            barheight = unit(140, units = "mm"),
+                            barwidth = unit(6, units = "mm")))
+
+Freqmap
+
+#Comment on map
+
+#GRAPH section
+
+#first plot
+#number of players by age group
+
+#18,278 players in total. 
+
+#This one is a bit crap
+
+AGE <- Fifa20players$age
+
+summary(AGE)
+
+hist(AGE, breaks = 10, main = 'Histogram of player ages', freq = TRUE, col = 'LIGHTBLUE', ylim = c(0, 3000))
+
+#Average age of 25 years and 4 months
+#majority of players between 19 and 30 years old, reflecting the average player career
+#much fewer players between 15 and 18, and 33 and above
+#reflects that young players feature less in general, and that playing careers generally do not last past early 30s
+
+#Players by positional group
+#adding a column for position groups  
+x <- as.factor(Fifa20players$team_position)
+levels(x) <- list(GK = c("GK"), DEF=c("LWB", "LB", "CB", "RB", "RWB"), MID = c("LW", "LM", "CDM", 'LDM', 'RDM', "CM", "CAM", "RM", "RW"), FWD = c("CF", "ST", 'LF', "RF"))
+
+Fifa20playerspositions <- mutate(Fifa20players, PositionGroup = x)
+
+head(Fifa20playerspositions)
+
+grouppos <- as.data.frame(table(Fifa20playerspositions$PositionGroup))
+
+ggplot(grouppos, aes(x=Var1, y=Freq)) + geom_bar(stat='identity',aes(fill = Freq)) + labs(title="Number of players by position group", x='Position Group', y='Number') +
+theme(legend.position = 'none')
+
+#Team position data         
+pos <- as.data.frame(table(Fifa20players$team_position))
+
+#Excluding subs, reserves and no position
+
+pos <- pos[-c(1, 30, 23),]
+
+pos
+
+#Bar plot by every position
+ggplot(pos, aes(x=Var1, y=Freq, col='red')) + geom_bar(stat = "identity") + labs(title = 'Number of players by club position', x='Position' ,y='Number') +
+  theme(legend.position = 'none')
+
+#Compare the two- first one suggests lots of midfielders but acc gk and and cb are most popular positions. 
+
+#Top 10 most valuable clubs based on total Player value in Eur
+     
+valueclub <- aggregate(Fifa20players$value_eur, by=list(club=Fifa20players$club), FUN=sum)
+
+top10valueclubs <- top_n(valueclub, 10, x)
+
+top10valueclubs$club <-as.factor(top10valueclubs$club)
+
+ggplot(top10valueclubs, aes(x = club, y = x/1000000, col='RED')) + geom_bar(stat = "identity", aes(fill=club)) + coord_flip() + ggtitle("Top 10 valuable clubs") +
+  labs(y='Club Value in Millions (Euros)', x='Club') +theme(legend.position = 'none')
+
+#Top 10 clubs based on average player potential
+
+potclub <- aggregate(Fifa20players$potential, by=list(club=Fifa20players$club), FUN=mean)
+
+top10potclubs <- top_n(potclub, 10, x)
+
+top10potclubs <- rename(top10potclubs,c('x'='Average Player Potential'))
+
+kable(top10potclubs, 'html') %>%
+  cat(., file = 'top10potclubs.html') #table
+
+#Top clubs based on average rating
+
+clubsoverall <- aggregate(Fifa20players$overall, by=list(club=Fifa20players$club), FUN=mean)
+
+top10clubsoverall <- top_n(clubsoverall, 10, x)
+
+top10clubsoverall <- rename(top10clubsoverall,c('x'='Average Player Overall'))
+
+kable(top10clubsoverall, 'html') %>%
+  cat(., file = 'top10clubsoverall.html') #table
+
+#Need to get bayern and atletico in there somehow- just add them w text boxes- bayern is top one atletico is below borussia
+                    
+#Comment on how top valuable clubs are different/similar to clubs by average rating/potential
+#Comment saying that top clubs by avg potential could be next big ones. 
+
+#Comparing top players by overall to top players by potential who aren't already in top 10 overall
+#which potential players could overtake the top overall ones
+
+top10playersrating <- top_n(Fifa20players, n=10, overall)
+
+top10playersrating <- top10playersrating[,c('short_name', 'overall')]
+
+kable(top10playersrating, 'html') %>%
+  cat(., file = 'top10playersrating.html')#table
+
+toppotential <- top_n(Fifa20players, n=10, potential)
+
+#removing those who are already in top 10, from top potential
+
+toppotential <- toppotential[-c(1, 2, 3, 4, 5),]
+
+toppotential <- toppotential[,c("short_name",'potential')]
+
+kable(toppotential, 'html') %>%
+  cat(., file = 'toppotential.html')#table
+
+#Note that the top potential players names are weird in r bc of accent thing
+#K.Mbappe, L.Sane, Joao Felix, Vinicius Jr
+#Mbappe could potentially become greatest player of all time according to potential
+
+#Value vs overall dot plot- need to adjust shapes for these dot things
+
+valuevsoverall <- Fifa20players[,c('value_eur', 'overall')]
+
+ggplot(valuevsoverall,aes(x=value_eur/1000000, y=overall, col='RED')) +
+  geom_point() + labs(title='Player Rating against Value', y='Overall Rating', x='Player Value in Millions (Euros)') +theme(legend.position = 'none')
+
+#Clear that as rating goes above 85, value increases exponentially due to fewer players at higher ratings, so they are highly valued
+
+#Wages vs overall rating
+
+wagevsoverall <- Fifa20players[,c('wage_eur', 'overall')]
+
+ggplot(wagevsoverall,aes(x=wage_eur/100000, y=overall, color='red')) +
+  geom_point() + labs(title='Player Rating against Wage ', y='Overall Rating', x='Weekly Player Wage in Hundred Thousands (Euros)') +theme(legend.position = 'none')
+
+#Clear from rating against wage that as rating exceeds 85, wages increase exponentially. 
+
+#Both of the above diagrams show that rating is strongly correlated w/ age and value
+
+#Age against wage 
+
+agevswage <- Fifa20players[,c('age', 'wage_eur')]
+
+ggplot(agevswage,aes(x=wage_eur/100000, y=age, colour='lightblue')) +
+  geom_point() + labs(title='Player Age against Wage ', y='Age', x='Weekly Player Wage in Hundred Thousands (Euros)') +theme(legend.position = 'none')
+
+#Generally, wages seem to peak around late 20s to early 30s, when players are in prime. 
+#Few outliers on wage scale reflect the very best players
+#Vast majority of players get below 200,000 euros a month- those above this are likley the very best
+
+#team jersey number and rating correlated? 
+
+#Looking at all players first
+jerseynovsoverall <- Fifa20players[,c('team_jersey_number', 'overall')]
+
+ggplot(jerseynovsoverall,aes(x=team_jersey_number, y=overall, colour='lightblue')) +
+  geom_point() + labs(title='Player Shirt Number against Overall Rating', y='Overall', x='Player Shirt Number') +theme(legend.position = 'none')
+
+#We can see on this plot- although it is a bit unclear that the top players generally have a lower kit number, 
+#From the rating of about 80 upwards, they generally have a kit number below 30
+#some higher kit numbers could sub players or young players early in their careers
+
+#Looking at the top players a bit more closely to examine their kit numbers
+
+jerseynovsoveralltop200 <- jerseynovsoverall[c(1:200),]
+
+ggplot(jerseynovsoveralltop200,aes(x=team_jersey_number, y=overall, colour='lightblue')) +
+  geom_point() + labs(title='Top 200 Players Shirt Number against Overall Rating', y='Overall', x='Player Shirt Number') +theme(legend.position = 'none')
+
+#We can see that the top 200 players generally have shirt numbers below 35, with a few exceptions- these may be keepers or subs or reserves
+#Or very young rotational squad players
+#Looking at the top players in the world, about 88 ranking and above
+#clear that kit numbers become lower numbers- reflects starting keeper numbers
+#Number 10, 7 and 9 are highly sought after numbers that the best attackers wear
+#indeed the top rated players are Messi, Ronaldo, Neymar etc- Messi and Ronaldo can be seen on this chart
+#as the two points that are the only two to stand above a rating of 92.5. 
+
+#BMI 
+
+#Converting cm to metres
+Fifa20metresheight <- Fifa20players[,5]/100
+
+Fifa20playerswheightinm <- add_column(Fifa20players, Fifa20metresheight)
+
+Fifa20playerswheightinm$Fifa20metresheight
+
+Fifa20BMI <- mutate(Fifa20playerswheightinm, BMI= Fifa20playerswheightinm$weight/Fifa20playerswheightinm$Fifa20metresheight^2)
+
+Fifa20BMIfinal <- Fifa20BMI[,c('BMI', 'overall')]
+
+#BMI and overall rating link
+ggplot(Fifa20BMIfinal,aes(x=BMI, y=overall, colour='lightblue')) +
+  geom_point() + labs(title='Actual BMI against Overall Rating', y='Overall', x='BMI') +theme(legend.position = 'none')
+
+#Clear that majority of players are in healthy range
+#Big outlier is Akinfenwa lol
+#The very highest rated players have a BMI very close to 25
+#The very highest rated player- Messi has BMI of virtually 25- but BMI doesn't take into account muscle properly 
+#But even outliers or underweight or overweight by BMI is no big deal
+#as BMI is not a great measure of fitness- weight could be due to muscle
+#underweight could be due to tall height. 
+
+#Using Random Forest imputed values for BMI and rating link
+
+completemetresfifa <- completefifa20data$height_cm/100
+
+completefifa20metres <- add_column(completefifa20data, completemetresfifa)
+
+Fifa20BMIimpute <- mutate(Fifa20BMIfinal, imputeBMI= completefifa20metres$weight_kg/completefifa20metres$completemetresfifa^2)
+
+FifaimputedBMI <- Fifa20BMIimpute[,c('imputeBMI', 'overall')]
+
+ggplot(FifaimputedBMI,aes(x=imputeBMI, y=overall, colour='lightblue')) +
+  geom_point(aes()) + labs(title='Imputed BMI against Overall Rating', y='Overall', x='Imputed BMI') +theme(legend.position = 'none')
+
+#Imputed BMI has more spread as height and weight have been predicted using random forest
+#and are not actual results. 
+#Also a few more outliers upper and lower ends of BMI
+
+#Clubs by average BMI- helps avoid problem of number of players at clubs
+
+BMIclub <- aggregate(Fifa20BMI$BMI, by=list(club=Fifa20BMI$club), FUN=mean)
+
+BMIclub <- rename(BMIclub,c('x'='BMI'))
+
+top10BMIclubs <- top_n(BMIclub, 10, BMI)
+
+kable(top10BMIclubs, 'html') %>%
+  cat(., file = 'top10BMIclubs.html')#table
+
+lowest10BMI <- top_n(BMIclub, 10, -BMI)
+
+kable(lowest10BMI, 'html') %>%
+  cat(., file = 'lowest10BMIpls.html')#table
+
+#BMIs dont differ hugely between top 10 and lowest 10
+#Reflects that most football players have to be fit- no avg is 25 or greater
+#which is considered overweight
+
+#Age distribution in the top 10 most valuable clubs
+
+ageclubs <- aggregate(Fifa20players$age, by=list(club=Fifa20players$club), FUN=mean)
+
+ageclubs <- add_column(ageclubs, valueclub$x)
+
+ageclubstop10 <- top_n(ageclubs, 10, valueclub$x)
+
+ageclubstop10 <- rename(ageclubstop10,c('x'='Average_age'))
+ageclubstop10 <- rename(ageclubstop10,c('valueclub$x'='Club Value'))
+  
+kable(ageclubstop10, 'html') %>%
+  cat(., file = 'ageclubstop10.html')
+
+  ggplot(ageclubstop10, aes(x = club, y = Average_age, fill=club)) +
+    geom_bar(stat = 'identity') +
+    theme(axis.text.x = element_text(angle = 90), legend.position = "none") +
+    ylim(0, 40) +
+  labs(title="Average Age at top 10 clubs", y="Average Age", x='Club')  
+  
+#Juventus have oldest squad- known for buying veteran players for cheap
+#their average squad age is 27  
+#Youngest average squad age is Borussia Dortmund's at 23 years and 8 months- known for their academy
+#and letting young players play regularly
+  
+#Attributes by position
+e <- aggregate(Fifa20playerspositions[,26:33], by=list(PositionGroup=Fifa20playerspositions$PositionGroup), FUN = mean)   
+
+e
+
+#Multibar chart of attributes by position using mean of each attribute across position groups
+
+#Melting data to reshape it
+data.e <- melt(e, id.vars='PositionGroup')
+
+#Plot
+ggplot(data.e, aes(PositionGroup, value)) +   
+  geom_bar(aes(fill = variable), position = "dodge", stat="identity") +
+  labs(title = 'Attributes by Position Group', x= 'Position Group', y= 'Value') +
+  theme(panel.background = element_rect(fill = 'black'))
+
+#Clear that forwards have best shooting, but also suprisingly higher avg physical than
+#midfielders and defenders
+#Defenders have reasonable passing, but midfielders are as expected best at this
+#as expected, defenders are best at defending, followed by midfield and then forwards
+#midfielders are very slightly better at dribbling than forwards
+#surprising that defenders seem to be fastest, followed by midfield and then forwards
+#and that forwards seem to be the most physical- ahead of defenders
+#perhaps reflects that many strikers are hold up type players
+#also there are far more defenders and midfielders than forwards
+#perhaps this shows that the variety of players is why mids and defenders seem to 
+#on average be quicker than forwards
+  
+##Correlation of heatmap of attributes and overall and value and potential
+
+Corr <- Fifa20players
+
+#Checking which columns are numeric
+sapply(Corr, is.numeric)
+
+#Dropping all non-numeric columns
+Corr <- Corr[, sapply(Corr, is.numeric)]
+
+#Note that NA values need to be removed here for this cor to work
+yay <- cor(Corr, use = "complete.obs", method = "pearson")
+
+bfg <- corrplot(yay, method = 'circle')
+
+#Printing the corrplot to scale and saving the file
+col4 <- scico(100, palette = 'vik')
+filetag <- "bfgpls.png"
+
+png(filetag, height = 4500, width = 4500)
+
+corrplot(yay, order = "AOE", upper = "ellipse", lower = "number", 
+               upper.col = col4, lower.col = col4,
+               tl.cex = 2, cl.cex = 2, number.cex = 2)
+dev.off()
+
+#AOE is angular order of eigenvectors
+
+#Regressions
+#Random Forest w/ just numerical values used in heatmap
+
+dim(Fifa20players)
+
+#Seperating training and test set
+#Training Sample with 1300 observations
+trainFifa20 <- sample(1:nrow(Fifa20players),1300)
+
+Fifa20players_rf <- randomForest(overall~., data = Corr, subset = trainFifa20)
+
+#Number of variables randomly selected at each split is 20. 
+
+plot(Fifa20players_rf)
+
+#Clear from plot that error falls as more trees are added and averaged. 
+
+dim(Corr)
+
+oob.err <- double(60)
+test.err <- double(60)
+
+#mtry is no of Variables randomly chosen at each split. #We are growing 400 trees for all 60 predictors
+for(mtry in 1:60) 
+{
+  rfy <- randomForest(overall ~ . , data = Corr , subset = trainFifa20,mtry=mtry,ntree=400) 
+  oob.err[mtry] <- rfy$mse[400] #Error of all Trees fitted
+  
+  pred<-predict(rfy,Fifa20players[-trainFifa20,]) #Predictions on Test Set for each Tree
+  test.err[mtry]= with(Fifa20players[-trainFifa20,], mean( (overall - pred)^2)) #Mean Squared Test Error
+  
+  cat(mtry," ") #printing the output to the console
+  
+}
+
+matplot(1:mtry , cbind(oob.err,test.err), pch=19 , col=c("red","blue"),type="b",ylab="Mean Squared Error",xlab="Number of Predictors Considered at each Split")
+legend("topright",legend=c("Out of Bag Error","Test Error"),pch=19, col=c("red","blue"))
+
+#Edit comments a bit. 
+#Now what we observe is that the Red line is the Out of Bag Error Estimates and 
+#the Blue Line is the Error calculated on Test Set. 
+#Both curves are quite smooth and the error estimates are quite correlated too- out of bag error is generally lower MSE
+#The Error Tends to be minimized at around mtry= 54
+#On the Extreme Right Hand Side of the above plot, we considered all possible 
+#60 predictors at each Split which is only Bagging.
 
